@@ -67,7 +67,7 @@ export default function App() {
   const handleUrlChange = (modelKey, val) => {
     const updated = { ...apiUrls, [modelKey]: val };
     setApiUrls(updated);
-    localStorage.setItem('api_urls', JSON.stringify(updated));
+    localStorage.setItem('api_urls_v2', JSON.stringify(updated));
   };
 
   // Limpiar polling al desmontar
@@ -85,7 +85,11 @@ export default function App() {
     setPredictedScore(null);
     setQueriedUrl('');
 
-    const targetUrl = apiUrls[m] || DEFAULT_API_URLS[m];
+    let targetUrl = (apiUrls[m] || DEFAULT_API_URLS[m] || '').trim();
+    // Asegurar que siempre termine en /score para evitar el error 405 Method Not Allowed
+    if (targetUrl && !targetUrl.endsWith('/score')) {
+      targetUrl = targetUrl.replace(/\/+$/, '') + '/score';
+    }
     setQueriedUrl(targetUrl);
 
     try {
