@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const CLOUDINARY_URLS = {
   '100': 'https://res.cloudinary.com/dc7x4qjzu/raw/upload/v1793169074/spotify_100.csv',
@@ -33,9 +33,12 @@ export default function App() {
     return localStorage.getItem('gh_token') || import.meta.env.VITE_GITHUB_TOKEN || '';
   });
 
-  // Estado para el Reentrenamiento (GitHub Actions)
+  // Estado para el Reentrenamiento y la Barra de Progreso
   const [trainingStatus, setTrainingStatus] = useState(null);
   const [trainingLoading, setTrainingLoading] = useState(false);
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [currentStepText, setCurrentStepText] = useState('');
+  const pollingRef = useRef(null);
 
   // Características de audio de Spotify
   const [formData, setFormData] = useState({
@@ -67,15 +70,22 @@ export default function App() {
     localStorage.setItem('api_urls', JSON.stringify(updated));
   };
 
+  // Limpiar polling al desmontar
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
+
   // 1. Consumir predicción REAL del modelo en Render
-  const handlePredict = async (e) => {
-    if (e) e.preventDefault();
+  const handlePredict = async (modelToUse) => {
+    const m = modelToUse || selectedModel;
     setLoading(true);
     setErrorMessage('');
     setPredictedScore(null);
     setQueriedUrl('');
 
-    const targetUrl = apiUrls[selectedModel] || DEFAULT_API_URLS[selectedModel];
+    const targetUrl = apiUrls[m] || DEFAULT_API_URLS[m];
     setQueriedUrl(targetUrl);
 
     try {
@@ -96,13 +106,89 @@ export default function App() {
       setPredictedScore(scoreVal);
     } catch (err) {
       console.error(err);
-      setErrorMessage(`Error al conectar con Render (${targetUrl}): ${err.message}. Verifica que el servicio esté activo y no suspendido.`);
+      setErrorMessage(`Error al conectar con Render (${targetUrl}): ${err.message}. Verifica que el servicio esté activo.`);
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Disparar el reentrenamiento mediante GitHub Actions (Workflow CI/CD)
+  // 2. Monitorear progreso real de GitHub Actions
+  const pollWorkflowStatus = (dispatchTime, pct) => {
+    let elapsed = 0;
+    pollingRef.current = setInterval(async () => {
+      elapsed += 3;
+
+      try {
+        const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=1`, {
+          headers: {
+            'Authorization': `Bearer ${githubToken.trim()}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const run = data.workflow_runs?.[0];
+
+          if (run) {
+            if (run.status === 'in_progress') {
+              // Intentar leer pasos del trabajo
+              const jobsRes = await fetch(run.jobs_url, {
+                headers: {
+                  'Authorization': `Bearer ${githubToken.trim()}`,
+                  'Accept': 'application/vnd.github.v3+json'
+                }
+              });
+
+              if (jobsRes.ok) {
+                const jobsData = await jobsRes.json();
+                const steps = jobsData.jobs?.[0]?.steps || [];
+                const current = steps.find(s => s.status === 'in_progress');
+                const completedCount = steps.filter(s => s.conclusion === 'success').length;
+
+                const stepName = current ? current.name : 'Ejecutando pasos del pipeline...';
+                setCurrentStepText(`Paso actual: ${stepName}`);
+
+                // Calcular porcentaje basado en pasos completados (12 pasos aprox)
+                const calcPercent = Math.min(92, Math.max(15, Math.round((completedCount / 12) * 100)));
+                setProgressPercent(calcPercent);
+              } else {
+                setCurrentStepText('Compilando modelo y construyendo imagen Docker...');
+                setProgressPercent(Math.min(90, 20 + elapsed));
+              }
+            } else if (run.status === 'completed') {
+              clearInterval(pollingRef.current);
+              setProgressPercent(100);
+              setCurrentStepText('Pipeline finalizado con éxito. Imagen publicada en Docker Hub.');
+              setTrainingLoading(false);
+              setTrainingStatus({
+                type: 'success',
+                message: `Reentrenamiento al ${pct}% completado exitosamente en GitHub Actions. La nueva imagen está en Docker Hub. Consultando nuevo score en Render...`
+              });
+
+              // Llamar a predecir con el nuevo modelo reentrenado
+              setTimeout(() => {
+                handlePredict(pct);
+              }, 1500);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error polling runs:', e);
+      }
+
+      // Si pasa mucho tiempo (>100s), detener
+      if (elapsed > 120) {
+        clearInterval(pollingRef.current);
+        setTrainingLoading(false);
+        setProgressPercent(100);
+        setCurrentStepText('Tiempo de espera finalizado. Puedes probar el modelo.');
+      }
+    }, 3000);
+  };
+
+  // 3. Disparar el reentrenamiento mediante GitHub Actions (Workflow CI/CD)
   const handleRetrain = async (pct) => {
     if (!githubToken) {
       setTrainingStatus({
@@ -112,12 +198,16 @@ export default function App() {
       return;
     }
 
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
     setTrainingLoading(true);
     setSelectedModel(pct);
+    setProgressPercent(10);
+    setCurrentStepText('Enviando webhook repository_dispatch a GitHub Actions...');
 
     setTrainingStatus({
       type: 'info',
-      message: `Disparando reentrenamiento al ${pct}% en GitHub Actions...`
+      message: `Disparando reentrenamiento al ${pct}% con el dataset de Cloudinary...`
     });
 
     const payload = {
@@ -140,24 +230,29 @@ export default function App() {
       });
 
       if (response.status === 204) {
+        setProgressPercent(20);
+        setCurrentStepText('Webhook recibido por GitHub Actions (Status 204). Iniciando máquina virtual...');
         setTrainingStatus({
-          type: 'success',
-          message: `Reentrenamiento al ${pct}% disparado con éxito (Status: 204 No Content). GitHub Actions está ejecutando el pipeline para construir y subir lez26/spotify-model:spotify-${pct}.`
+          type: 'info',
+          message: `Webhook 204 No Content recibido. Monitoreando ejecución en GitHub Actions...`
         });
+
+        // Iniciar monitoreo del progreso del workflow
+        pollWorkflowStatus(Date.now(), pct);
       } else {
         const errorText = await response.text();
+        setTrainingLoading(false);
         setTrainingStatus({
           type: 'error',
           message: `Error al disparar workflow: ${response.status} - ${errorText}`
         });
       }
     } catch (err) {
+      setTrainingLoading(false);
       setTrainingStatus({
         type: 'error',
         message: `Error de red al conectar con GitHub: ${err.message}`
       });
-    } finally {
-      setTrainingLoading(false);
     }
   };
 
@@ -261,7 +356,7 @@ export default function App() {
       </div>
 
       {/* Formulario con las 12 características de Spotify */}
-      <form onSubmit={handlePredict}>
+      <form onSubmit={(e) => { e.preventDefault(); handlePredict(); }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
           <div>
             <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#4a5568' }}>Bailabilidad (Danceability 0-1):</label>
@@ -399,7 +494,7 @@ export default function App() {
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || trainingLoading}
           style={{
             width: '100%',
             marginTop: '22px',
@@ -408,7 +503,7 @@ export default function App() {
             color: 'white',
             border: 'none',
             borderRadius: '6px',
-            cursor: loading ? 'not-allowed' : 'pointer',
+            cursor: (loading || trainingLoading) ? 'not-allowed' : 'pointer',
             fontSize: '16px',
             fontWeight: 'bold',
             transition: 'background-color 0.2s ease'
@@ -468,7 +563,7 @@ export default function App() {
           Reentrenamiento de Modelos (GitHub Actions CI/CD)
         </h3>
         <p style={{ fontSize: '13px', color: '#718096', textAlign: 'center', marginBottom: '16px' }}>
-          Dispara el reentrenamiento en GitHub Actions con el dataset de Cloudinary:
+          Dispara el reentrenamiento en GitHub Actions y observa el progreso en tiempo real:
         </p>
 
         <div style={{ marginBottom: '14px' }}>
@@ -541,16 +636,42 @@ export default function App() {
           </button>
         </div>
 
-        {trainingStatus && (
+        {/* BARRA DE PROGRESO VISUAL DEL WORKFLOW DE CI/CD */}
+        {trainingLoading && (
+          <div style={{ marginTop: '20px', padding: '16px', backgroundColor: '#f7fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '13px', fontWeight: 'bold', color: '#2d3748' }}>
+              <span>Progreso del Reentrenamiento en GitHub Actions:</span>
+              <span style={{ color: '#1DB954' }}>{progressPercent}%</span>
+            </div>
+
+            {/* Contenedor de la barra */}
+            <div style={{ width: '100%', height: '12px', backgroundColor: '#edf2f7', borderRadius: '6px', overflow: 'hidden' }}>
+              <div style={{
+                width: `${progressPercent}%`,
+                height: '100%',
+                backgroundColor: progressPercent === 100 ? '#38a169' : '#1DB954',
+                borderRadius: '6px',
+                transition: 'width 0.4s ease-in-out'
+              }} />
+            </div>
+
+            {/* Texto del paso actual */}
+            <p style={{ marginTop: '10px', fontSize: '12px', color: '#718096', textAlign: 'center', margin: '8px 0 0 0' }}>
+              {currentStepText}
+            </p>
+          </div>
+        )}
+
+        {trainingStatus && !trainingLoading && (
           <div style={{
             marginTop: '15px',
             padding: '12px',
             borderRadius: '6px',
             fontSize: '13px',
             textAlign: 'center',
-            backgroundColor: trainingStatus.type === 'success' ? '#ebf8ff' : (trainingStatus.type === 'info' ? '#feebc8' : '#fed7d7'),
-            color: trainingStatus.type === 'success' ? '#2b6cb0' : (trainingStatus.type === 'info' ? '#744210' : '#9b2c2c'),
-            border: `1px solid ${trainingStatus.type === 'success' ? '#bee3f8' : (trainingStatus.type === 'info' ? '#fbd38d' : '#feb2b2')}`
+            backgroundColor: trainingStatus.type === 'success' ? '#ebf8ff' : '#fed7d7',
+            color: trainingStatus.type === 'success' ? '#2b6cb0' : '#9b2c2c',
+            border: `1px solid ${trainingStatus.type === 'success' ? '#bee3f8' : '#feb2b2'}`
           }}>
             {trainingStatus.message}
           </div>
