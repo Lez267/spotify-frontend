@@ -23,7 +23,7 @@ export default function App() {
 
   // URLs de Render para cada modelo
   const [apiUrls, setApiUrls] = useState(() => {
-    const saved = localStorage.getItem('api_urls');
+    const saved = localStorage.getItem('api_urls_v2');
     return saved ? JSON.parse(saved) : DEFAULT_API_URLS;
   });
   const [showUrlConfig, setShowUrlConfig] = useState(false);
