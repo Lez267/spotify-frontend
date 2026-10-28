@@ -7,9 +7,9 @@ const CLOUDINARY_URLS = {
 };
 
 const DEFAULT_API_URLS = {
-  '100': 'https://heart-model-i-love-adsoftsito-100.onrender.com/score',
+  '100': 'https://spotify-model-spotify-100.onrender.com/score',
   '50': 'https://spotify-model-50.onrender.com/score',
-  '25': 'https://spotify-model-25.onrender.com/score'
+  '25': 'https://spotify-model-spotify-25.onrender.com/score'
 };
 
 const GITHUB_REPO = 'Lez267/spotify-model';
