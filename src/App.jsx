@@ -6,22 +6,27 @@ const CLOUDINARY_URLS = {
   '25': 'https://res.cloudinary.com/dc7x4qjzu/raw/upload/v1793169070/spotify_25.csv'
 };
 
-const MODEL_SCORES = {
-  '100': 49.64,
-  '50': 47.64,
-  '25': 51.63
+const DEFAULT_API_URLS = {
+  '100': 'https://heart-model-i-love-adsoftsito-100.onrender.com/score',
+  '50': 'https://spotify-model-50.onrender.com/score',
+  '25': 'https://spotify-model-25.onrender.com/score'
 };
 
 const GITHUB_REPO = 'Lez267/spotify-model';
 
-// URL del backend en Render
-const BACKEND_URL = 'https://heart-model-i-love-adsoftsito-100.onrender.com/score';
-
 export default function App() {
   const [selectedModel, setSelectedModel] = useState('100');
   const [loading, setLoading] = useState(false);
-  const [predictedScore, setPredictedScore] = useState(49.64);
+  const [predictedScore, setPredictedScore] = useState(null);
+  const [queriedUrl, setQueriedUrl] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+
+  // URLs de Render para cada modelo
+  const [apiUrls, setApiUrls] = useState(() => {
+    const saved = localStorage.getItem('api_urls');
+    return saved ? JSON.parse(saved) : DEFAULT_API_URLS;
+  });
+  const [showUrlConfig, setShowUrlConfig] = useState(false);
 
   // Token para Reentrenamiento (GitHub Actions)
   const [githubToken, setGithubToken] = useState(() => {
@@ -56,55 +61,45 @@ export default function App() {
     }));
   };
 
-  // 1. Consumir predicción del modelo
+  const handleUrlChange = (modelKey, val) => {
+    const updated = { ...apiUrls, [modelKey]: val };
+    setApiUrls(updated);
+    localStorage.setItem('api_urls', JSON.stringify(updated));
+  };
+
+  // 1. Consumir predicción REAL del modelo en Render
   const handlePredict = async (e) => {
     if (e) e.preventDefault();
     setLoading(true);
     setErrorMessage('');
+    setPredictedScore(null);
+    setQueriedUrl('');
 
-    const payload = {
-      model: selectedModel,
-      ...formData
-    };
+    const targetUrl = apiUrls[selectedModel] || DEFAULT_API_URLS[selectedModel];
+    setQueriedUrl(targetUrl);
 
     try {
-      const response = await fetch(BACKEND_URL, {
+      const response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(formData)
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
-      let scoreVal = data.popularidad ?? data.score;
-
-      // Asignar el score correspondiente al modelo consultado
-      if (selectedModel === '50') {
-        scoreVal = 47.64;
-      } else if (selectedModel === '25') {
-        scoreVal = 51.63;
-      } else {
-        scoreVal = 49.64;
-      }
-
+      const scoreVal = data.popularidad ?? data.score;
       setPredictedScore(scoreVal);
     } catch (err) {
-      console.warn('Backend Render en reposo o error, usando predicción calculada:', err.message);
-      setPredictedScore(MODEL_SCORES[selectedModel] || 49.64);
+      console.error(err);
+      setErrorMessage(`Error al conectar con Render (${targetUrl}): ${err.message}. Verifica que el servicio esté activo y no suspendido.`);
     } finally {
       setLoading(false);
     }
-  };
-
-  // Cuando cambia el dropdown, actualizamos el modelo y recalculamos inmediatamente
-  const handleModelChange = (newModel) => {
-    setSelectedModel(newModel);
-    setPredictedScore(MODEL_SCORES[newModel] || 49.64);
   };
 
   // 2. Disparar el reentrenamiento mediante GitHub Actions (Workflow CI/CD)
@@ -118,9 +113,7 @@ export default function App() {
     }
 
     setTrainingLoading(true);
-    // Cambiamos automáticamente al modelo recién reentrenado para que se vea el cambio en pantalla
     setSelectedModel(pct);
-    setPredictedScore(MODEL_SCORES[pct]);
 
     setTrainingStatus({
       type: 'info',
@@ -149,7 +142,7 @@ export default function App() {
       if (response.status === 204) {
         setTrainingStatus({
           type: 'success',
-          message: `Reentrenamiento al ${pct}% disparado con éxito (Status: 204 No Content). GitHub Actions inició el pipeline con el dataset de Cloudinary.`
+          message: `Reentrenamiento al ${pct}% disparado con éxito (Status: 204 No Content). GitHub Actions está ejecutando el pipeline para construir y subir lez26/spotify-model:spotify-${pct}.`
         });
       } else {
         const errorText = await response.text();
@@ -191,18 +184,32 @@ export default function App() {
         </h2>
       </div>
 
-      <p style={{ textAlign: 'center', color: '#718096', fontSize: '14px', marginBottom: '24px' }}>
+      <p style={{ textAlign: 'center', color: '#718096', fontSize: '14px', marginBottom: '20px' }}>
         Selecciona el modelo entrenado y calcula la popularidad estimada del track.
       </p>
 
       {/* Selector de Modelo / Dataset */}
       <div style={{ marginBottom: '20px' }}>
-        <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#2d3748', fontSize: '14px' }}>
-          Dataset / Modelo a consultar:
-        </label>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <label style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '14px' }}>
+            Dataset / Modelo a consultar:
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowUrlConfig(!showUrlConfig)}
+            style={{ background: 'none', border: 'none', color: '#3182ce', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            {showUrlConfig ? 'Ocultar URLs de Render' : 'Configurar URLs de Render'}
+          </button>
+        </div>
+
         <select
           value={selectedModel}
-          onChange={(e) => handleModelChange(e.target.value)}
+          onChange={(e) => {
+            setSelectedModel(e.target.value);
+            setPredictedScore(null);
+            setErrorMessage('');
+          }}
           style={{
             width: '100%',
             padding: '11px',
@@ -217,6 +224,40 @@ export default function App() {
           <option value="50">Modelo Entrenado al 50% Dataset (16,416 tracks)</option>
           <option value="25">Modelo Entrenado al 25% Dataset (8,208 tracks)</option>
         </select>
+
+        {/* Panel de configuración de URLs de Render */}
+        {showUrlConfig && (
+          <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '12px' }}>
+            <p style={{ fontWeight: 'bold', marginBottom: '8px', color: '#4a5568' }}>Endpoints de Render para cada modelo:</p>
+            <div style={{ marginBottom: '6px' }}>
+              <label style={{ display: 'block', color: '#718096' }}>URL Modelo 100%:</label>
+              <input
+                type="text"
+                value={apiUrls['100']}
+                onChange={(e) => handleUrlChange('100', e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e0', borderRadius: '4px', fontSize: '12px' }}
+              />
+            </div>
+            <div style={{ marginBottom: '6px' }}>
+              <label style={{ display: 'block', color: '#718096' }}>URL Modelo 50%:</label>
+              <input
+                type="text"
+                value={apiUrls['50']}
+                onChange={(e) => handleUrlChange('50', e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e0', borderRadius: '4px', fontSize: '12px' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', color: '#718096' }}>URL Modelo 25%:</label>
+              <input
+                type="text"
+                value={apiUrls['25']}
+                onChange={(e) => handleUrlChange('25', e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e0', borderRadius: '4px', fontSize: '12px' }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Formulario con las 12 características de Spotify */}
@@ -373,11 +414,11 @@ export default function App() {
             transition: 'background-color 0.2s ease'
           }}
         >
-          {loading ? 'Calculando...' : 'Calcular Predicción'}
+          {loading ? 'Consultando API en Render...' : 'Calcular Predicción'}
         </button>
       </form>
 
-      {/* Caja de Resultado */}
+      {/* Caja de Resultado con respuesta REAL del contenedor en Render */}
       {predictedScore !== null && (
         <div style={{
           marginTop: '22px',
@@ -391,9 +432,14 @@ export default function App() {
           <h3 style={{ margin: '0 0 6px 0', fontSize: '16px', fontWeight: '600' }}>
             Popularidad Estimada (Modelo {selectedModel}%):
           </h3>
-          <p style={{ fontSize: '32px', fontWeight: 'bold', margin: '0', color: '#1c4532' }}>
+          <p style={{ fontSize: '34px', fontWeight: 'bold', margin: '0 0 6px 0', color: '#1c4532' }}>
             {predictedScore} / 100
           </p>
+          {queriedUrl && (
+            <p style={{ fontSize: '11px', color: '#276749', margin: 0 }}>
+              Calculado en vivo por: {queriedUrl}
+            </p>
+          )}
         </div>
       )}
 
@@ -405,7 +451,8 @@ export default function App() {
           color: '#9b2c2c',
           borderRadius: '8px',
           textAlign: 'center',
-          border: '1px solid #feb2b2'
+          border: '1px solid #feb2b2',
+          fontSize: '13px'
         }}>
           {errorMessage}
         </div>
@@ -421,7 +468,7 @@ export default function App() {
           Reentrenamiento de Modelos (GitHub Actions CI/CD)
         </h3>
         <p style={{ fontSize: '13px', color: '#718096', textAlign: 'center', marginBottom: '16px' }}>
-          Dispara el reentrenamiento con el dataset de Cloudinary y actualiza el score en pantalla:
+          Dispara el reentrenamiento en GitHub Actions con el dataset de Cloudinary:
         </p>
 
         <div style={{ marginBottom: '14px' }}>
@@ -508,24 +555,6 @@ export default function App() {
             {trainingStatus.message}
           </div>
         )}
-
-        {/* Tabla comparativa de scores */}
-        <div style={{ marginTop: '18px', padding: '12px', backgroundColor: '#f7fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '12px' }}>
-          <div style={{ fontWeight: 'bold', color: '#4a5568', marginBottom: '6px', textAlign: 'center' }}>
-            Comparativa de Scores según el Reentrenamiento:
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center' }}>
-            <div>
-              <span style={{ color: '#718096' }}>Dataset 100%:</span> <strong style={{ color: '#2f855a' }}>49.64</strong>
-            </div>
-            <div>
-              <span style={{ color: '#718096' }}>Dataset 50%:</span> <strong style={{ color: '#b7791f' }}>47.64</strong>
-            </div>
-            <div>
-              <span style={{ color: '#718096' }}>Dataset 25%:</span> <strong style={{ color: '#c53030' }}>51.63</strong>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
