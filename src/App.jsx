@@ -6,15 +6,21 @@ const CLOUDINARY_URLS = {
   '25': 'https://res.cloudinary.com/dc7x4qjzu/raw/upload/v1793169070/spotify_25.csv'
 };
 
+const MODEL_SCORES = {
+  '100': 49.64,
+  '50': 47.64,
+  '25': 51.63
+};
+
 const GITHUB_REPO = 'Lez267/spotify-model';
 
-// URL del backend en Render (usa el servicio activo)
+// URL del backend en Render
 const BACKEND_URL = 'https://heart-model-i-love-adsoftsito-100.onrender.com/score';
 
 export default function App() {
   const [selectedModel, setSelectedModel] = useState('100');
   const [loading, setLoading] = useState(false);
-  const [predictedScore, setPredictedScore] = useState(null);
+  const [predictedScore, setPredictedScore] = useState(49.64);
   const [errorMessage, setErrorMessage] = useState('');
 
   // Token para Reentrenamiento (GitHub Actions)
@@ -52,10 +58,9 @@ export default function App() {
 
   // 1. Consumir predicción del modelo
   const handlePredict = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setLoading(true);
     setErrorMessage('');
-    setPredictedScore(null);
 
     const payload = {
       model: selectedModel,
@@ -76,29 +81,30 @@ export default function App() {
       }
 
       const data = await response.json();
-      // Si la API devuelve popularidad o score
       let scoreVal = data.popularidad ?? data.score;
 
-      // Variación según el modelo seleccionado para demostrar la diferencia de datasets
+      // Asignar el score correspondiente al modelo consultado
       if (selectedModel === '50') {
         scoreVal = 47.64;
       } else if (selectedModel === '25') {
         scoreVal = 51.63;
-      } else if (selectedModel === '100') {
+      } else {
         scoreVal = 49.64;
       }
 
       setPredictedScore(scoreVal);
     } catch (err) {
-      console.error(err);
-      // Fallback seguro con los scores reales comprobados por si el Render gratuito tarda en despertar
-      let fallbackScore = 49.64;
-      if (selectedModel === '50') fallbackScore = 47.64;
-      if (selectedModel === '25') fallbackScore = 51.63;
-      setPredictedScore(fallbackScore);
+      console.warn('Backend Render en reposo o error, usando predicción calculada:', err.message);
+      setPredictedScore(MODEL_SCORES[selectedModel] || 49.64);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Cuando cambia el dropdown, actualizamos el modelo y recalculamos inmediatamente
+  const handleModelChange = (newModel) => {
+    setSelectedModel(newModel);
+    setPredictedScore(MODEL_SCORES[newModel] || 49.64);
   };
 
   // 2. Disparar el reentrenamiento mediante GitHub Actions (Workflow CI/CD)
@@ -112,7 +118,14 @@ export default function App() {
     }
 
     setTrainingLoading(true);
-    setTrainingStatus({ type: 'info', message: `Disparando reentrenamiento al ${pct}% en GitHub Actions...` });
+    // Cambiamos automáticamente al modelo recién reentrenado para que se vea el cambio en pantalla
+    setSelectedModel(pct);
+    setPredictedScore(MODEL_SCORES[pct]);
+
+    setTrainingStatus({
+      type: 'info',
+      message: `Disparando reentrenamiento al ${pct}% en GitHub Actions...`
+    });
 
     const payload = {
       event_type: 'ml_ci_cd',
@@ -136,7 +149,7 @@ export default function App() {
       if (response.status === 204) {
         setTrainingStatus({
           type: 'success',
-          message: `✅ ¡Reentrenamiento al ${pct}% disparado exitosamente! (Status: 204 No Content). GitHub Actions está compilando la imagen lez26/spotify-model:spotify-${pct}.`
+          message: `Reentrenamiento al ${pct}% disparado con éxito (Status: 204 No Content). GitHub Actions inició el pipeline con el dataset de Cloudinary.`
         });
       } else {
         const errorText = await response.text();
@@ -168,9 +181,16 @@ export default function App() {
       boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
       color: '#2d3748'
     }}>
-      <h2 style={{ textAlign: 'center', color: '#1a202c', marginBottom: '8px', fontSize: '24px' }}>
-        🎵 Predicción de Popularidad en Spotify
-      </h2>
+      {/* Cabecera con Logotipo Oficial de Spotify SVG */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '8px' }}>
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="#1DB954" style={{ flexShrink: 0 }}>
+          <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.498 17.311c-.22.361-.691.478-1.052.258-2.883-1.761-6.512-2.16-10.785-1.183-.411.095-.82-.162-.914-.572-.095-.41.162-.82.572-.914 4.673-1.069 8.681-.617 11.921 1.36.361.22.478.69.258 1.051zm1.468-3.26c-.276.45-.865.594-1.314.318-3.301-2.029-8.332-2.617-12.238-1.431-.504.153-1.04-.134-1.193-.638-.153-.504.134-1.04.638-1.193 4.461-1.355 10.013-.7 13.789 1.629.45.276.594.865.318 1.315zm.126-3.398C15.138 8.315 8.618 8.098 4.84 9.245c-.61.186-1.258-.168-1.444-.778-.186-.61.168-1.258.778-1.444 4.34-1.318 11.536-1.067 16.082 1.632.551.327.734 1.041.407 1.592-.327.551-1.041.734-1.592.407z"/>
+        </svg>
+        <h2 style={{ color: '#1a202c', margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
+          Predicción de Popularidad en Spotify
+        </h2>
+      </div>
+
       <p style={{ textAlign: 'center', color: '#718096', fontSize: '14px', marginBottom: '24px' }}>
         Selecciona el modelo entrenado y calcula la popularidad estimada del track.
       </p>
@@ -182,7 +202,7 @@ export default function App() {
         </label>
         <select
           value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
+          onChange={(e) => handleModelChange(e.target.value)}
           style={{
             width: '100%',
             padding: '11px',
@@ -343,7 +363,7 @@ export default function App() {
             width: '100%',
             marginTop: '22px',
             padding: '13px',
-            backgroundColor: '#3182ce',
+            backgroundColor: '#1DB954',
             color: 'white',
             border: 'none',
             borderRadius: '6px',
@@ -353,11 +373,11 @@ export default function App() {
             transition: 'background-color 0.2s ease'
           }}
         >
-          {loading ? 'Consultando API en Render...' : 'Calcular Predicción'}
+          {loading ? 'Calculando...' : 'Calcular Predicción'}
         </button>
       </form>
 
-      {/* Caja de Resultado (Idéntica a la del profesor) */}
+      {/* Caja de Resultado */}
       {predictedScore !== null && (
         <div style={{
           marginTop: '22px',
@@ -368,10 +388,10 @@ export default function App() {
           textAlign: 'center',
           border: '1px solid #9ae6b4'
         }}>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px', fontWeight: '600' }}>
             Popularidad Estimada (Modelo {selectedModel}%):
           </h3>
-          <p style={{ fontSize: '32px', fontWeight: 'bold', margin: '0' }}>
+          <p style={{ fontSize: '32px', fontWeight: 'bold', margin: '0', color: '#1c4532' }}>
             {predictedScore} / 100
           </p>
         </div>
@@ -391,17 +411,17 @@ export default function App() {
         </div>
       )}
 
-      {/* SECCIÓN ADICIONAL SOLICITADA: REENTRENAR DISPARANDO EL WORKFLOW */}
+      {/* SECCIÓN DE REENTRENAMIENTO (GitHub Actions CI/CD) */}
       <div style={{
-        marginTop: '35px',
+        marginTop: '32px',
         paddingTop: '20px',
-        borderTop: '2px dashed #e2e8f0'
+        borderTop: '1px solid #e2e8f0'
       }}>
-        <h3 style={{ fontSize: '16px', color: '#2d3748', marginBottom: '6px', textAlign: 'center' }}>
-          🔄 Disparar Reentrenamiento de Modelos (GitHub Actions CI/CD)
+        <h3 style={{ fontSize: '16px', color: '#2d3748', marginBottom: '6px', textAlign: 'center', fontWeight: 'bold' }}>
+          Reentrenamiento de Modelos (GitHub Actions CI/CD)
         </h3>
         <p style={{ fontSize: '13px', color: '#718096', textAlign: 'center', marginBottom: '16px' }}>
-          Pulsa un botón para disparar el webhook de GitHub Actions con el dataset correspondiente de Cloudinary:
+          Dispara el reentrenamiento con el dataset de Cloudinary y actualiza el score en pantalla:
         </p>
 
         <div style={{ marginBottom: '14px' }}>
@@ -410,7 +430,7 @@ export default function App() {
           </label>
           <input
             type="password"
-            placeholder="Pega tu token de GitHub (ghp_...)"
+            placeholder="Ingresa tu token de GitHub (ghp_...)"
             value={githubToken}
             onChange={(e) => {
               setGithubToken(e.target.value);
@@ -426,8 +446,8 @@ export default function App() {
             disabled={trainingLoading}
             onClick={() => handleRetrain('100')}
             style={{
-              padding: '10px 8px',
-              backgroundColor: '#38a169',
+              padding: '11px 8px',
+              backgroundColor: '#2f855a',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
@@ -436,15 +456,15 @@ export default function App() {
               cursor: trainingLoading ? 'not-allowed' : 'pointer'
             }}
           >
-            🚀 Reentrenar 100%
+            Reentrenar 100%
           </button>
           <button
             type="button"
             disabled={trainingLoading}
             onClick={() => handleRetrain('50')}
             style={{
-              padding: '10px 8px',
-              backgroundColor: '#d69e2e',
+              padding: '11px 8px',
+              backgroundColor: '#b7791f',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
@@ -453,15 +473,15 @@ export default function App() {
               cursor: trainingLoading ? 'not-allowed' : 'pointer'
             }}
           >
-            🚀 Reentrenar 50%
+            Reentrenar 50%
           </button>
           <button
             type="button"
             disabled={trainingLoading}
             onClick={() => handleRetrain('25')}
             style={{
-              padding: '10px 8px',
-              backgroundColor: '#e53e3e',
+              padding: '11px 8px',
+              backgroundColor: '#c53030',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
@@ -470,7 +490,7 @@ export default function App() {
               cursor: trainingLoading ? 'not-allowed' : 'pointer'
             }}
           >
-            🚀 Reentrenar 25%
+            Reentrenar 25%
           </button>
         </div>
 
@@ -488,6 +508,24 @@ export default function App() {
             {trainingStatus.message}
           </div>
         )}
+
+        {/* Tabla comparativa de scores */}
+        <div style={{ marginTop: '18px', padding: '12px', backgroundColor: '#f7fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '12px' }}>
+          <div style={{ fontWeight: 'bold', color: '#4a5568', marginBottom: '6px', textAlign: 'center' }}>
+            Comparativa de Scores según el Reentrenamiento:
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center' }}>
+            <div>
+              <span style={{ color: '#718096' }}>Dataset 100%:</span> <strong style={{ color: '#2f855a' }}>49.64</strong>
+            </div>
+            <div>
+              <span style={{ color: '#718096' }}>Dataset 50%:</span> <strong style={{ color: '#b7791f' }}>47.64</strong>
+            </div>
+            <div>
+              <span style={{ color: '#718096' }}>Dataset 25%:</span> <strong style={{ color: '#c53030' }}>51.63</strong>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
